@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bài Giảng Tương Tác</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #f3f4f6; }
+        
+        /* Hiệu ứng lớp phủ mờ khi hiện câu hỏi */
+        .liquid-glass {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            backdrop-filter: blur(12px) saturate(180%);
+            -webkit-backdrop-filter: blur(12px) saturate(180%);
+            background: rgba(255, 255, 255, 0.2);
+            z-index: 50;
+            display: none; justify-content: center; align-items: center;
+        }
+        .liquid-glass.active { display: flex; animation: fadeIn 0.5s; }
+        
+        /* Popup câu hỏi */
+        .question-box {
+            background: white; width: 90%; max-width: 600px;
+            padding: 2rem; border-radius: 1rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* Ẩn thanh điều khiển video/iframe khi đang trả lời câu hỏi */
+        .locked-controls iframe { pointer-events: none !important; }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <!-- MÀN HÌNH ĐĂNG NHẬP -->
+    <div id="login-screen" class="fixed inset-0 bg-gray-900 z-[100] flex items-center justify-center">
+        <div class="bg-white p-8 rounded-xl w-full max-w-md shadow-2xl">
+            <h2 class="text-2xl font-bold text-center mb-6 text-gray-800">Vào lớp học</h2>
+            <div class="mb-6">
+                <label class="block text-gray-700 text-sm font-bold mb-2">Họ và Tên</label>
+                <input type="text" id="student-name" class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Nguyễn Văn A">
+            </div>
+            
+            <button onclick="startSession()" id="btn-start" class="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition">
+                BẮT ĐẦU HỌC
+            </button>
+            <p id="loading-text" class="text-center text-sm text-gray-500 mt-4 hidden"><i class="fas fa-spinner fa-spin mr-2"></i>Đang tải dữ liệu bài giảng...</p>
+        </div>
+    </div>
+
+    <!-- TRÌNH PHÁT VIDEO CHÍNH -->
+    <main class="max-w-5xl mx-auto px-4 py-8 hidden" id="main-content">
+        <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+            <div class="p-4 border-b flex justify-between items-center bg-gray-50">
+                <div>
+                    <h1 class="font-bold text-lg text-gray-800">Bài giảng Video Tương Tác</h1>
+                    <p class="text-sm text-gray-500">Học sinh: <span id="display-name" class="font-semibold text-blue-600">...</span></p>
+                </div>
+                <div class="text-right">
+                    <div class="text-xs text-gray-500">Tiến độ</div>
+                    <div class="font-bold text-gray-800"><span id="score-display">0</span> câu đúng</div>
+                </div>
+            </div>
+
+            <div class="relative w-full aspect-video bg-black group" id="video-container">
+                <!-- YouTube Player Placeholder -->
+                <div id="youtube-player"></div>
+
+                <!-- Lớp phủ câu hỏi -->
+                <div id="overlay" class="liquid-glass">
+                    <div class="question-box">
+                        <div class="flex items-center mb-4">
+                            <span class="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded mr-2">CÂU HỎI</span>
+                            <span id="timer-display" class="text-xs text-gray-500 ml-auto"></span>
+                        </div>
+                        
+                        <!-- Nội dung câu hỏi -->
+                        <div id="q-content-area">
+                            <h3 class="text-lg font-bold text-gray-900 mb-4" id="q-text">Nội dung câu hỏi...</h3>
+                            <div id="q-image" class="mb-4 hidden"><img src="" class="max-h-48 rounded mx-auto"></div>
+                            <div id="q-options" class="space-y-3"></div>
+                        </div>
+
+                        <!-- Feedback sau khi trả lời -->
+                        <div id="feedback-area" class="hidden mt-4 pt-4 border-t">
+                            <p id="feedback-msg" class="font-bold text-lg mb-2"></p>
+                            <p id="feedback-detail" class="text-sm text-gray-600 mb-4"></p>
+                            <button onclick="continueVideo()" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 w-full">
+                                Tiếp tục bài giảng <i class="fas fa-play ml-2"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Load YouTube IFrame API -->
+    <script src="https://www.youtube.com/iframe_api"></script>
+
+    <script>
+        // ================= CẤU HÌNH =================
+        const SCRIPT_URL = 'YOUR_APPS_SCRIPT_WEB_APP_URL_HERE'; 
+        
+        // ĐIỀN ID VIDEO YOUTUBE VÀO ĐÂY (Ví dụ: https://www.youtube.com/watch?v=M7lc1UVf-VE => ID là M7lc1UVf-VE)
+        const YOUTUBE_VIDEO_ID = 'M7lc1UVf-VE'; 
+
+        let state = {
+            studentName: '',
+            questions: [], 
+            answeredIds: [], 
+            pendingAnswers: [], 
+            currentQuestion: null,
+            score: 0
+        };
+
+        let player; // Biến lưu đối tượng YouTube Player
+        let timeCheckInterval; // Biến lưu vòng lặp kiểm tra thời gian
+        const overlay = document.getElementById('overlay');
+        const videoContainer = document.getElementById('video-container');
+
+        // ================= YOUTUBE API SETUP =================
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('youtube-player', {
+                height: '100%',
+                width: '100%',
+                videoId: YOUTUBE_VIDEO_ID,
+                playerVars: {
+                    'playsinline': 1,
+                    'controls': 1, // Hiển thị thanh điều khiển
+                    'rel': 0 // Không hiển thị video liên quan khi kết thúc
+                },
+                events: {
+                    'onReady': onPlayerReady,
+                    'onStateChange': onPlayerStateChange
+                }
+            });
+        }
+
+        function onPlayerReady(event) {
+            log("YouTube Player đã sẵn sàng.");
+        }
+
+        function onPlayerStateChange(event) {
+            if (event.data == YT.PlayerState.PLAYING) {
+                startTimeCheck();
+            } else {
+                stopTimeCheck();
+            }
+        }
+
+        function startTimeCheck() {
+            stopTimeCheck(); // Clear cũ nếu có
+            timeCheckInterval = setInterval(checkTime, 1000); // Kiểm tra mỗi giây
+        }
+
+        function stopTimeCheck() {
+            if (timeCheckInterval) clearInterval(timeCheckInterval);
+        }
+
+        // ================= LOGIC CHÍNH =================
+
+        async function startSession() {
+            if (SCRIPT_URL.includes('YOUR_APPS_SCRIPT')) {
+                alert('LỖI CẤU HÌNH: Bạn chưa dán link Web App URL vào file code!');
+                return;
+            }
+
+            const name = document.getElementById('student-name').value.trim();
+            if (!name) return alert('Vui lòng nhập tên!');
+            
+            document.getElementById('btn-start').disabled = true;
+            document.getElementById('loading-text').classList.remove('hidden');
+            
+            state.studentName = name;
+            document.getElementById('display-name').innerText = name;
+
+            log('Đang tải câu hỏi...');
+
+            try {
+                const response = await fetch(SCRIPT_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        action: 'getQuestions',
+                        studentName: name,
+                        adaptiveMode: false, 
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.error) throw new Error('Server báo lỗi: ' + data.error);
+
+                if (data.questions) {
+                    state.questions = data.questions.filter(q => q.timestamp !== undefined && q.timestamp !== null);
+                    state.questions.sort((a, b) => a.timestamp - b.timestamp);
+
+                    log(`Đã tải ${state.questions.length} câu hỏi tương tác.`);
+                    
+                    if(state.questions.length === 0) {
+                        alert(`Không tìm thấy câu hỏi nào có 'timestamp' trong hệ thống.`);
+                    }
+
+                    document.getElementById('login-screen').classList.add('hidden');
+                    document.getElementById('main-content').classList.remove('hidden');
+                    
+                    if(player && player.playVideo) {
+                        player.playVideo();
+                    }
+                } else {
+                    throw new Error('Lỗi cấu trúc dữ liệu trả về từ Server.');
+                }
+
+            } catch (e) {
+                console.error(e);
+                alert('Lỗi kết nối: ' + e.message);
+                document.getElementById('btn-start').disabled = false;
+                document.getElementById('loading-text').classList.add('hidden');
+            }
+        }
+
+        // Hàm kiểm tra thời gian (thay cho ontimeupdate)
+        function checkTime() {
+            if (overlay.classList.contains('active')) return; 
+            if (!player || !player.getCurrentTime) return;
+
+            const currentTime = Math.floor(player.getCurrentTime());
+            
+            const question = state.questions.find(q => 
+                Math.abs(q.timestamp - currentTime) < 1 && 
+                !state.answeredIds.includes(q.id)
+            );
+
+            if (question) {
+                showQuestion(question);
+            }
+        }
+
+        function showQuestion(q) {
+            player.pauseVideo();
+            videoContainer.classList.add('locked-controls'); // CSS sẽ chặn click vào iframe
+            state.currentQuestion = q;
+            state.startTime = Date.now();
+
+            document.getElementById('q-text').innerText = q.question;
+            
+            const imgDiv = document.getElementById('q-image');
+            if (q.imageUrl) {
+                imgDiv.querySelector('img').src = q.imageUrl;
+                imgDiv.classList.remove('hidden');
+            } else {
+                imgDiv.classList.add('hidden');
+            }
+
+            const optsDiv = document.getElementById('q-options');
+            optsDiv.innerHTML = '';
+            document.getElementById('q-content-area').classList.remove('hidden');
+            document.getElementById('feedback-area').classList.add('hidden');
+
+            if (q.type === 'mc') {
+                q.options.forEach((opt, idx) => {
+                    const btn = document.createElement('button');
+                    btn.className = "w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-blue-50 transition text-gray-700 font-medium";
+                    btn.innerText = opt;
+                    btn.onclick = () => submitAnswer(idx);
+                    optsDiv.appendChild(btn);
+                });
+            } else {
+                const input = document.createElement('input');
+                input.type = "text";
+                input.className = "w-full p-3 border rounded mb-2";
+                input.placeholder = "Nhập câu trả lời...";
+                const btn = document.createElement('button');
+                btn.className = "bg-blue-600 text-white px-4 py-2 rounded";
+                btn.innerText = "Trả lời";
+                btn.onclick = () => submitAnswer(input.value);
+                optsDiv.append(input, btn);
+            }
+
+            overlay.classList.add('active');
+        }
+
+        async function submitAnswer(answerVal) {
+            const q = state.currentQuestion;
+            const timeTaken = Math.round((Date.now() - state.startTime) / 1000);
+            
+            state.pendingAnswers.push({ id: q.id, answer: answerVal, timeTaken: timeTaken });
+            state.answeredIds.push(q.id);
+
+            log(`Đang chấm điểm câu ${q.id}...`);
+            
+            try {
+                const response = await fetch(SCRIPT_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        action: 'submitQuiz',
+                        studentName: state.studentName,
+                        answers: [{ id: q.id, answer: answerVal, timeTaken: timeTaken }],
+                        questionIds: [q.id]
+                    })
+                });
+                
+                const resultData = await response.json();
+
+                if (resultData.error) throw new Error(resultData.error);
+                if (!resultData.detailedResults || resultData.detailedResults.length === 0) throw new Error('Lỗi dữ liệu trả về');
+                
+                const result = resultData.detailedResults[0]; 
+                showFeedback(result);
+                
+                if (result.isCorrect) {
+                    state.score++;
+                    document.getElementById('score-display').innerText = state.score;
+                }
+
+            } catch (e) {
+                console.error(e);
+                showFeedback({ isCorrect: false, questionText: "Lỗi", correctAnswer: "Lỗi kết nối: " + e.message });
+            }
+        }
+
+        function showFeedback(result) {
+            document.getElementById('q-content-area').classList.add('hidden');
+            const fbArea = document.getElementById('feedback-area');
+            const fbMsg = document.getElementById('feedback-msg');
+            const fbDetail = document.getElementById('feedback-detail');
+
+            fbArea.classList.remove('hidden');
+            
+            if (result.isCorrect) {
+                fbMsg.innerHTML = '<span class="text-green-600"><i class="fas fa-check-circle"></i> Chính xác!</span>';
+                fbDetail.innerText = "Bạn đã trả lời đúng.";
+            } else {
+                fbMsg.innerHTML = '<span class="text-red-600"><i class="fas fa-times-circle"></i> Chưa đúng</span>';
+                if (result.correctAnswer !== undefined) {
+                    fbDetail.innerText = `Đáp án đúng là: ${result.correctAnswer}`; 
+                } else {
+                    fbDetail.innerText = "Hãy cố gắng ở câu sau nhé!";
+                }
+            }
+        }
+
+        function continueVideo() {
+            overlay.classList.remove('active');
+            videoContainer.classList.remove('locked-controls');
+            player.playVideo();
+        }
+
+        function log(msg) {
+            console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
+        }
+
+    </script>
+</body>
+</html>
